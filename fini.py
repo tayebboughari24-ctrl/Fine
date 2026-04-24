@@ -8,7 +8,7 @@ from datetime import datetime
 import io
 import time
 
-# --- 1. CONFIGURATION & STYLING ---
+# --- 1. إعدادات الهوية البصرية (SaaS UI/UX) ---
 st.set_page_config(
     page_title="Sentify Pro | AI Sentiment Intelligence",
     page_icon="🧠",
@@ -16,227 +16,196 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-def apply_custom_style():
-    st.markdown("""
-    <style>
-        /* Main Styling */
-        .main { background-color: #fcfcfd; }
-        .stMetric { background-color: #ffffff; padding: 15px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
-        
-        /* Custom Cards */
-        .sentiment-card {
-            padding: 24px;
-            border-radius: 16px;
-            border-left: 6px solid;
-            margin-bottom: 20px;
-            background-color: white;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-        }
-        
-        /* Animation Effects */
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        .fade-in { animation: fadeIn 0.8s ease-in; }
-        
-        /* Buttons Styling */
-        .stButton>button {
-            border-radius: 10px;
-            font-weight: 600;
-            transition: all 0.3s;
-        }
-        .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-    </style>
-    """, unsafe_allow_status=True)
+# تصميم عصري مخصص باستخدام CSS
+st.markdown("""
+<style>
+    .main { background-color: #f8fafc; }
+    .stMetric { background-color: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
+    .sentiment-card {
+        padding: 25px;
+        border-radius: 18px;
+        border-left: 8px solid;
+        margin-bottom: 25px;
+        background-color: white;
+        box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+    }
+    .stButton>button {
+        border-radius: 12px;
+        font-weight: 600;
+        height: 3em;
+        transition: all 0.3s ease;
+    }
+    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+    .stTextArea>div>div>textarea { border-radius: 15px; border: 1px solid #e2e8f0; }
+</style>
+""", unsafe_allow_status=True)
 
-# --- 2. CORE AI ENGINE (SENTIMENT ANALYZER) ---
-class SentimentSaaS:
+# --- 2. محرك الذكاء الاصطناعي (Backend Optimized) ---
+
+@st.cache_resource(show_spinner="جاري تحميل محرك الذكاء الاصطناعي...")
+def load_sentiment_pipeline():
+    """تحميل النموذج مرة واحدة فقط مع دعم الـ GPU إذا توفر"""
+    device = 0 if torch.cuda.is_available() else -1
+    return pipeline(
+        "sentiment-analysis", 
+        model="distilbert-base-uncased-finetuned-sst-2-english",
+        device=device,
+        truncation=True
+    )
+
+class SentimentAnalyzer:
     def __init__(self):
-        self.model_name = "distilbert-base-uncased-finetuned-sst-2-english"
-        self.device = 0 if torch.cuda.is_available() else -1
+        self.engine = load_sentiment_pipeline()
 
-    @st.cache_resource(_self)
-    def get_pipeline(_self):
-        """تحميل النموذج مرة واحدة مع دعم الـ GPU"""
-        return pipeline(
-            "sentiment-analysis", 
-            model=_self.model_name,
-            device=_self.device,
-            truncation=True
-        )
+    def analyze(self, texts):
+        """تحليل النصوص بنظام الدفعات (Batch Processing) لسرعة قصوى"""
+        return self.engine(texts, batch_size=16)
 
-    def analyze_batch(self, texts):
-        """Batch Processing لضمان السرعة العالية في الملفات الضخمة"""
-        nlp = self.get_pipeline()
-        return nlp(texts, batch_size=16)
-
-# --- 3. SESSION STATE MANAGEMENT ---
-def init_session():
+# --- 3. وظائف مساعدة ---
+def init_state():
     if 'history' not in st.session_state:
         st.session_state.history = []
-    if 'current_results' not in st.session_state:
-        st.session_state.current_results = None
+    if 'last_analysis' not in st.session_state:
+        st.session_state.last_analysis = None
 
-# --- 4. UI COMPONENTS ---
-def render_sidebar():
-    with st.sidebar:
-        st.image("https://cdn-icons-png.flaticon.com/512/8653/8653200.png", width=70)
-        st.title("Sentify Pro AI")
-        st.caption("v2.5.0 | Enterprise Edition")
-        st.divider()
-        
-        mode = st.selectbox("🎯 Analysis Mode", ["Single Text", "Batch File Processing", "Analytics History"])
-        
-        st.divider()
-        st.subheader("💡 Tips")
-        st.info("Batch processing supports up to 10k rows for real-time analysis.")
-        
-        if st.button("Reset Session 🔄", use_container_width=True):
-            st.session_state.history = []
-            st.rerun()
-        
-        return mode
+def save_to_history(text, label, score):
+    st.session_state.history.append({
+        "الوقت": datetime.now().strftime("%H:%M:%S"),
+        "النص": text[:50] + "...",
+        "التصنيف": label,
+        "الثقة": f"{score:.2%}"
+    })
 
-def render_metrics(df):
-    if not df.empty:
-        pos_pct = len(df[df['Sentiment'] == 'POSITIVE']) / len(df)
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total Analyzed", len(df))
-        c2.metric("Positive Rate", f"{pos_pct:.1%}", delta="Optimistic" if pos_pct > 0.5 else "Neutral")
-        c3.metric("Avg Confidence", f"{df['Confidence'].mean():.1%}")
-
-# --- 5. MAIN APP LOGIC ---
+# --- 4. واجهة المستخدم الرسومية ---
 def main():
-    apply_custom_style()
-    init_session()
-    ai_engine = SentimentSaaS()
+    init_state()
+    analyzer = SentimentAnalyzer()
     
-    selected_mode = render_sidebar()
+    # القائمة الجانبية
+    with st.sidebar:
+        st.markdown("<h1 style='text-align: center;'>Sentify Pro</h1>", unsafe_allow_status=True)
+        st.image("https://cdn-icons-png.flaticon.com/512/8653/8653200.png", width=100)
+        st.divider()
+        
+        mode = st.selectbox("🎯 اختر وضع التشغيل", ["التحليل السريع", "معالجة الملفات الكبيرة", "سجل العمليات"])
+        
+        st.divider()
+        if st.button("مسح جميع البيانات 🗑️", use_container_width=True):
+            st.session_state.history = []
+            st.session_state.last_analysis = None
+            st.rerun()
 
-    if selected_mode == "Single Text":
-        st.title("🚀 Real-time Sentiment Intelligence")
-        st.markdown("Analyze customer feedback or social media posts instantly using deep learning.")
+    # --- الوضع الأول: التحليل السريع ---
+    if mode == "التحليل السريع":
+        st.title("🚀 تحليل المشاعر الفوري")
+        st.markdown("أدخل أي نص باللغة الإنجليزية للحصول على تحليل دقيق ومعمق.")
 
-        col_input, col_result = st.columns([1.2, 0.8], gap="large")
+        col_in, col_out = st.columns([1.2, 0.8], gap="large")
 
-        with col_input:
-            st.subheader("Input Data")
-            example_text = "The new product launch exceeded all our expectations, the interface is incredibly intuitive!"
+        with col_in:
+            st.subheader("مدخلات النص")
+            example = "This platform has completely transformed how we handle customer feedback. The UI is sleek and the speed is unmatched!"
             
-            if st.button("✨ Use Professional Example"):
-                st.session_state.txt_area = example_text
+            if st.button("✨ تجربة نص احترافي"):
+                st.session_state.user_text = example
             
             user_input = st.text_area(
-                "Enter text for analysis:", 
-                value=st.session_state.get('txt_area', ""),
+                "ماذا يدور في ذهنك؟",
+                value=st.session_state.get('user_text', ""),
                 height=200,
-                placeholder="Paste your content here..."
+                placeholder="Paste content here..."
             )
 
-            if st.button("Analyze Sentiment 🔍", type="primary", use_container_width=True):
+            if st.button("بدء التحليل الذكي 🔍", type="primary", use_container_width=True):
                 if user_input.strip():
-                    with st.spinner("Neural network processing..."):
-                        result = ai_engine.analyze_batch([user_input])[0]
+                    with st.spinner("جاري المعالجة عبر الشبكة العصبية..."):
+                        start_time = time.time()
+                        res = analyzer.analyze([user_input])[0]
+                        duration = time.time() - start_time
                         
-                        # Save to history
-                        entry = {
-                            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                            "Content": user_input[:100] + "...",
-                            "Sentiment": result['label'],
-                            "Confidence": result['score']
-                        }
-                        st.session_state.history.append(entry)
-                        st.session_state.current_results = result
+                        st.session_state.last_analysis = {**res, "duration": duration}
+                        save_to_history(user_input, res['label'], res['score'])
                 else:
-                    st.warning("Please provide some text first.")
+                    st.warning("الرجاء كتابة نص أولاً.")
 
-        with col_result:
-            st.subheader("Analysis Result")
-            if st.session_state.current_results:
-                res = st.session_state.current_results
-                color = "#10b981" if res['label'] == "POSITIVE" else "#ef4444"
-                label_ar = "إيجابي" if res['label'] == "POSITIVE" else "سلبي"
+        with col_out:
+            st.subheader("النتيجة التحليلية")
+            if st.session_state.last_analysis:
+                data = st.session_state.last_analysis
+                color = "#10b981" if data['label'] == "POSITIVE" else "#ef4444"
                 
                 st.markdown(f"""
-                <div class="sentiment-card fade-in" style="border-color: {color};">
-                    <h1 style="color: {color}; margin-bottom:0;">{res['label']}</h1>
-                    <p style="color: #6b7280; font-size: 1.1em;">Confidence: {res['score']:.2%}</p>
+                <div class="sentiment-card" style="border-color: {color};">
+                    <h1 style="color: {color}; margin: 0;">{data['label']}</h1>
+                    <p style="color: #64748b; font-size: 1.1em;">نسبة الثقة: {data['score']:.2%}</p>
+                    <small>وقت التنفيذ: {data['duration']:.3f} ثانية</small>
                 </div>
                 """, unsafe_allow_status=True)
-                
-                # Confidence Meter
+
+                # رسم بياني دائري صغير
                 fig = go.Figure(go.Indicator(
                     mode = "gauge+number",
-                    value = res['score'] * 100,
-                    domain = {'x': [0, 1], 'y': [0, 1]},
-                    title = {'text': "Confidence Score (%)", 'font': {'size': 18}},
-                    gauge = {'axis': {'range': [0, 100]},
-                             'bar': {'color': color},
-                             'steps' : [{'range': [0, 50], 'color': "#f3f4f6"}]}))
-                fig.update_layout(height=250, margin=dict(t=30, b=0, l=30, r=30))
+                    value = data['score'] * 100,
+                    gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': color}}
+                ))
+                fig.update_layout(height=250, margin=dict(t=0, b=0))
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.info("Results will appear here after analysis.")
+                st.info("ستظهر نتائج التحليل هنا بمجرد البدء.")
 
-    elif selected_mode == "Batch File Processing":
-        st.title("📂 Enterprise Batch Processing")
-        st.markdown("Upload large datasets to extract sentiment trends across thousands of rows.")
+    # --- الوضع الثاني: معالجة الملفات ---
+    elif mode == "معالجة الملفات الكبيرة":
+        st.title("📂 المعالجة الجماعية (Bulk Processing)")
+        st.markdown("ارفع ملفات CSV تحتوي على آلاف التعليقات لتحليلها دفعة واحدة.")
         
-        uploaded_file = st.file_uploader("Drop CSV or Excel file", type=["csv", "xlsx"])
+        uploaded_file = st.file_uploader("اختر ملف (CSV / Excel)", type=["csv", "xlsx"])
         
         if uploaded_file:
             df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('csv') else pd.read_excel(uploaded_file)
+            st.success(f"تم تحميل الملف بنجاح! يحتوي على {len(df)} صف.")
             
-            with st.expander("👀 Data Preview", expanded=True):
-                st.dataframe(df.head(10), use_container_width=True)
+            target_col = st.selectbox("اختر العمود الذي يحتوي على النصوص:", df.columns)
             
-            target_col = st.selectbox("Select Text Column:", df.columns)
-            
-            if st.button("Start Batch Analysis 🚀", type="primary"):
-                with st.status("Analyzing large dataset...", expanded=True) as status:
+            if st.button("بدء المعالجة الشاملة 🚀", type="primary"):
+                with st.status("جاري تحليل البيانات الضخمة...") as status:
                     texts = df[target_col].astype(str).tolist()
-                    results = ai_engine.analyze_batch(texts)
+                    results = analyzer.analyze(texts)
                     
                     df['Sentiment'] = [r['label'] for r in results]
                     df['Confidence'] = [r['score'] for r in results]
-                    status.update(label="Analysis Complete!", state="complete")
-                
-                st.divider()
-                render_metrics(df)
-                
-                c1, c2 = st.columns(2)
-                with c1:
-                    fig_pie = px.pie(df, names='Sentiment', color='Sentiment', 
-                                    color_discrete_map={'POSITIVE':'#10b981', 'NEGATIVE':'#ef4444'},
-                                    hole=0.5, title="Sentiment Distribution")
-                    st.plotly_chart(fig_pie, use_container_width=True)
-                with c2:
-                    st.subheader("Download Results")
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                        df.to_excel(writer, index=False, sheet_name='Analysis')
-                    st.download_button(
-                        "Download Analyzed Excel 📥", 
-                        data=output.getvalue(), 
-                        file_name="sentify_results.xlsx",
-                        use_container_width=True
-                    )
-                st.dataframe(df, use_container_width=True)
+                    status.update(label="اكتمل التحليل!", state="complete")
 
-    elif selected_mode == "Analytics History":
-        st.title("📜 Analysis History & Trends")
+                # عرض داشبورد مصغر للملف
+                st.divider()
+                c1, c2, c3 = st.columns(3)
+                pos_count = len(df[df['Sentiment'] == 'POSITIVE'])
+                c1.metric("إجمالي النصوص", len(df))
+                c2.metric("إيجابي ✅", pos_count)
+                c3.metric("سلبي ❌", len(df) - pos_count)
+
+                # الرسم البياني للملف
+                fig_bar = px.histogram(df, x="Sentiment", color="Sentiment", 
+                                      color_discrete_map={'POSITIVE': '#10b981', 'NEGATIVE': '#ef4444'})
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+                # تحميل النتائج
+                csv_data = df.to_csv(index=False).encode('utf-8')
+                st.download_button("تحميل تقرير النتائج (CSV) ⬇️", data=csv_data, file_name="analysis_report.csv", use_container_width=True)
+
+    # --- الوضع الثالث: السجل ---
+    elif mode == "سجل العمليات":
+        st.title("📜 سجل النشاط")
         if st.session_state.history:
-            h_df = pd.DataFrame(st.session_state.history)
+            df_history = pd.DataFrame(st.session_state.history)
+            st.table(df_history)
             
-            st.subheader("Historical Timeline")
-            fig_line = px.line(h_df, x="Timestamp", y="Confidence", color="Sentiment",
-                              color_discrete_map={'POSITIVE':'#10b981', 'NEGATIVE':'#ef4444'},
-                              markers=True)
-            st.plotly_chart(fig_line, use_container_width=True)
-            
-            st.subheader("Detailed Logs")
-            st.table(h_df)
+            # تحليل بسيط للسجل
+            if len(df_history) > 1:
+                fig_hist = px.pie(df_history, names="التصنيف", title="توزيع المشاعر في السجل الحالي")
+                st.plotly_chart(fig_hist)
         else:
-            st.info("No history found. Start analyzing to build your database.")
+            st.info("السجل فارغ حالياً.")
 
 if __name__ == "__main__":
     main()
-      
+        
