@@ -1,171 +1,214 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from transformers import pipeline
-from PIL import Image
-import torch
-from datetime import datetime
 import io
-import time
+import re
+import matplotlib.pyplot as plt
+import seaborn as sns
+from PIL import Image
+from wordcloud import WordCloud
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, ConfusionMatrixDisplay
+from transformers import pipeline
 
-# --- 1. SETTINGS & STYLING ---
-st.set_page_config(
-    page_title="Sentify Multi-Modal AI",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ==========================================
+# 1. CONFIGURATION & PAGE STYLE
+# ==========================================
+st.set_page_config(page_title="AI Sentiment Dashboard", page_icon="🚀", layout="wide")
 
 st.markdown("""
-<style>
-    .main { background-color: #f8fafc; }
-    .stMetric { background-color: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
-    .sentiment-card {
-        padding: 25px;
-        border-radius: 18px;
-        border-left: 8px solid;
-        margin-bottom: 25px;
-        background-color: white;
-        box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
-    }
-    .stButton>button {
-        border-radius: 12px;
-        font-weight: 600;
-        height: 3.2em;
-        transition: all 0.3s ease;
-        width: 100%;
-    }
-    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
-</style>
-""", unsafe_allow_html=True)
+    <style>
+    .main { background-color: #f5f7f9; }
+    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #007bff; color: white; }
+    .reportview-container .main .block-container { padding-top: 2rem; }
+    .prediction-card { padding: 20px; border-radius: 10px; background-color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border-left: 5px solid #007bff; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- 2. AI ENGINES (CACHED) ---
+LABEL_ORDER = ["Positive", "Neutral", "Negative"]
 
-@st.cache_resource(show_spinner="Loading Text Intelligence...")
-def load_text_model():
-    device = 0 if torch.cuda.is_available() else -1
-    return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english", device=device)
+# ==========================================
+# 2. CACHED MODELS (تحميل النماذج لمرة واحدة)
+# ==========================================
+@st.cache_resource
+def load_models():
+    text_pipe = pipeline("sentiment-analysis", model="nlptown/bert-base-multilingual-uncased-sentiment")
+    image_pipe = pipeline("image-classification", model="dima806/facial_emotions_image_detection")
+    return text_pipe, image_pipe
 
-@st.cache_resource(show_spinner="Loading Vision Intelligence...")
-def load_image_model():
-    device = 0 if torch.cuda.is_available() else -1
-    return pipeline("image-classification", model="google/vit-base-patch16-224", device=device)
+text_engine, image_engine = load_models()
 
-# --- 3. SESSION MANAGEMENT ---
-if 'history' not in st.session_state:
-    st.session_state.history = []
+# ==========================================
+# 3. UTILITY FUNCTIONS
+# ==========================================
+def clean_text(text):
+    if not isinstance(text, str): return ""
+    text = text.lower()
+    text = re.sub(r"http\S+|www\S+|https\S+", '', text, flags=re.MULTILINE)
+    text = re.sub(r'[^\w\s]', '', text)
+    return text.strip()
 
-def add_to_history(input_type, content, result):
-    st.session_state.history.append({
-        "Time": datetime.now().strftime("%H:%M:%S"),
-        "Type": input_type,
-        "Preview": content[:40] + "...",
-        "Outcome": result
-    })
+def get_bert_prediction(text):
+    try:
+        cleaned = clean_text(text)
+        if not cleaned: return "Neutral", 0.0
+        result = text_engine(cleaned)[0]
+        stars = int(result['label'].split()[0])
+        score = result['score']
+        if stars <= 2: label = "Negative"
+        elif stars == 3: label = "Neutral"
+        else: label = "Positive"
+        return label, score
+    except:
+        return "Neutral", 0.0
 
-# --- 4. MAIN APP STRUCTURE ---
-def main():
-    # Load models
-    text_model = load_text_model()
-    image_model = load_image_model()
+# ==========================================
+# 4. SIDEBAR NAVIGATION
+# ==========================================
+st.sidebar.title("🤖 AI Control Panel")
+st.sidebar.markdown("---")
+mode = st.sidebar.radio("اختر وضع التحليل:", 
+                        ["تحليل النصوص 📝", "تحليل الصور 🖼️", "تحليل الملفات 📂"])
 
-    with st.sidebar:
-        st.markdown("<h1 style='text-align: center;'>Sentify AI</h1>", unsafe_allow_html=True)
-        st.image("https://cdn-icons-png.flaticon.com/512/8653/8653200.png", width=100)
-        st.divider()
-        
-        mode = st.selectbox("🎯 Select Analysis Mode", 
-                            ["Text Analysis", "Batch File Processing", "Image Analysis", "History Logs"])
-        
-        st.divider()
-        if st.button("Clear All Data 🗑️"):
-            st.session_state.history = []
-            st.rerun()
+st.sidebar.markdown("---")
+st.sidebar.info("هذا التطبيق يستخدم نماذج BERT و ViT لتحليل المشاعر بدقة احترافية.")
 
-    # --- MODE 1: TEXT ANALYSIS ---
-    if mode == "Text Analysis":
-        st.title("📝 Text Sentiment Analysis")
-        col_in, col_out = st.columns([1.2, 0.8], gap="large")
-
-        with col_in:
-            user_text = st.text_area("Enter English text:", height=200, placeholder="Type something positive or negative...")
-            if st.button("Analyze Text 🔍", type="primary"):
-                if user_text.strip():
-                    with st.spinner("Analyzing..."):
-                        res = text_model(user_text)[0]
-                        st.session_state.last_text_res = res
-                        add_to_history("Text", user_text, res['label'])
-                else:
-                    st.warning("Please enter text.")
-
-        with col_out:
-            if 'last_text_res' in st.session_state:
-                res = st.session_state.last_text_res
-                color = "#10b981" if res['label'] == "POSITIVE" else "#ef4444"
-                st.markdown(f"""<div class="sentiment-card" style="border-color: {color};">
-                    <h2 style="color: {color};">{res['label']}</h2>
-                    <p>Confidence: {res['score']:.2%}</p></div>""", unsafe_allow_html=True)
-                fig = go.Figure(go.Indicator(mode="gauge+number", value=res['score']*100, 
-                                            gauge={'axis':{'range':[0,100]}, 'bar':{'color':color}}))
-                st.plotly_chart(fig, use_container_width=True)
-
-    # --- MODE 2: BATCH FILE PROCESSING ---
-    elif mode == "Batch File Processing":
-        st.title("📂 Batch Data Processing")
-        uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
-        if uploaded_file:
-            df = pd.read_csv(uploaded_file)
-            col = st.selectbox("Select Text Column:", df.columns)
-            if st.button("Process Batch 🚀"):
-                with st.status("Processing rows...") as s:
-                    results = text_model(df[col].astype(str).tolist(), batch_size=16)
-                    df['Sentiment'] = [r['label'] for r in results]
-                    df['Score'] = [r['score'] for r in results]
-                    s.update(label="Complete!", state="complete")
-                st.dataframe(df.head())
-                st.download_button("Download Results 📥", df.to_csv(index=False), "results.csv")
-
-    # --- MODE 3: IMAGE ANALYSIS (NEW FEATURE) ---
-    elif mode == "Image Analysis":
-        st.title("🖼️ Image AI Vision")
-        st.markdown("Identify objects and scenes using Vision Transformer.")
-        
-        col_img, col_res = st.columns([1, 1], gap="large")
-
-        with col_img:
-            img_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"])
-            if img_file:
-                st.image(img_file, use_container_width=True, caption="Uploaded Image")
-
-        with col_res:
-            if img_file:
-                if st.button("Analyze Image 🔍", type="primary"):
-                    with st.spinner("Visualizing..."):
-                        img = Image.open(img_file)
-                        predictions = image_model(img)
-                        top = predictions[0]
-                        
-                        color = "#10b981" if top['score'] > 0.5 else "#f59e0b"
-                        st.markdown(f"""<div class="sentiment-card" style="border-color: {color};">
-                            <h3 style="color: {color};">Top Prediction:</h3>
-                            <h1 style="text-transform: capitalize;">{top['label']}</h1>
-                            <p>Confidence: {top['score']:.2%}</p></div>""", unsafe_allow_html=True)
-                        
-                        df_v = pd.DataFrame(predictions)
-                        st.plotly_chart(px.bar(df_v, x='score', y='label', orientation='h', color='score'), use_container_width=True)
-                        add_to_history("Image", img_file.name, top['label'])
-            else:
-                st.info("Upload an image to start.")
-
-    # --- MODE 4: HISTORY ---
-    elif mode == "History Logs":
-        st.title("📜 Operation History")
-        if st.session_state.history:
-            st.table(pd.DataFrame(st.session_state.history))
+# ==========================================
+# 5. MODE: TEXT ANALYSIS
+# ==========================================
+if mode == "تحليل النصوص 📝":
+    st.header("📝 تحليل مشاعر النصوص (BERT)")
+    user_input = st.text_area("أدخل النص المراد تحليله هنا:", placeholder="أنا سعيد جداً باستخدام هذا التطبيق...")
+    
+    if st.button("تحليل النص"):
+        if user_input:
+            label, conf = get_bert_prediction(user_input)
+            
+            # عرض النتيجة في بطاقة
+            st.markdown(f"""
+            <div class="prediction-card">
+                <h3>النتيجة: {label}</h3>
+                <p>نسبة الثقة: <b>{conf:.2%}</b></p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # بروجرس بار للثقة
+            st.progress(conf)
         else:
-            st.info("No records found.")
+            st.warning("يرجى إدخال نص أولاً.")
 
-if __name__ == "__main__":
-    main()
+# ==========================================
+# 6. MODE: IMAGE ANALYSIS
+# ==========================================
+elif mode == "تحليل الصور 🖼️":
+    st.header("🖼️ تحليل مشاعر الوجه (Vision Transformer)")
+    uploaded_file = st.file_uploader("قم برفع صورة وجه...", type=['jpg', 'jpeg', 'png'])
+
+    if uploaded_file is not None:
+        img = Image.open(uploaded_file)
+        col1, col2 = st.columns(2)
         
+        with col1:
+            st.image(img, caption="الصورة المرفوعة", use_container_width=True)
+        
+        with col2:
+            with st.spinner('جاري تحليل الصورة...'):
+                results = image_engine(img)
+                st.subheader("نتائج التحليل:")
+                for res in results[:3]:
+                    st.write(f"**{res['label']}**: {res['score']:.2%}")
+                    st.progress(res['score'])
+
+# ==========================================
+# 7. MODE: FILE ANALYSIS
+# ==========================================
+elif mode == "تحليل الملفات 📂":
+    st.header("📂 تحليل الملفات والمقارنة الأكاديمية")
+    uploaded_file = st.file_uploader("ارفع ملف Excel أو CSV", type=['csv', 'xlsx'])
+
+    if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('csv') else pd.read_excel(uploaded_file)
+        st.write("معاينة البيانات:", df.head())
+        
+        col_text = st.selectbox("اختر عمود النصوص:", df.columns)
+        col_label = st.selectbox("اختر عمود التصنيف الحقيقي (Ground Truth):", df.columns)
+        
+        if st.button("بدء المعالجة والمقارنة"):
+            with st.spinner('جاري تشغيل النماذج (قد يستغرق وقتاً)...'):
+                df = df.dropna(subset=[col_text, col_label]).reset_index(drop=True)
+
+                # --- BERT Prediction ---
+                bert_results = df[col_text].apply(get_bert_prediction)
+                df['BERT_Label'] = [x[0] for x in bert_results]
+                
+                # --- ML Logic Regression ---
+                X_train, X_test, y_train, y_test, idx_train, idx_test = train_test_split(
+                    df[col_text], df[col_label], df.index, test_size=0.2, random_state=42
+                )
+                
+                vectorizer = TfidfVectorizer(preprocessor=clean_text, max_features=2500)
+                X_train_vec = vectorizer.fit_transform(X_train)
+                X_test_vec = vectorizer.transform(X_test)
+                
+                lr_model = LogisticRegression(max_iter=1000)
+                lr_model.fit(X_train_vec, y_train)
+                
+                # --- Visualizations ---
+                st.subheader("📊 الرسوم البيانية")
+                c1, c2 = st.columns(2)
+                
+                with c1:
+                    # WordCloud
+                    all_text = " ".join(df[col_text].astype(str))
+                    wc = WordCloud(width=800, height=400, background_color='white').generate(all_text)
+                    fig, ax = plt.subplots()
+                    ax.imshow(wc, interpolation='bilinear')
+                    ax.axis('off')
+                    st.pyplot(fig)
+                    st.caption("سحابة الكلمات الأكثر تكراراً")
+
+                with c2:
+                    # Distribution
+                    fig, ax = plt.subplots()
+                    sns.countplot(data=df, x='BERT_Label', order=LABEL_ORDER, palette="viridis", ax=ax)
+                    st.pyplot(fig)
+                    st.caption("توزيع المشاعر (BERT)")
+
+                # --- Metrics Comparison ---
+                st.subheader("🏆 مقارنة أداء النماذج")
+                y_test_bert = df.loc[idx_test, 'BERT_Label']
+                y_test_lr = lr_model.predict(X_test_vec)
+                
+                acc_bert = accuracy_score(y_test, y_test_bert)
+                acc_lr = accuracy_score(y_test, y_test_lr)
+                
+                m1, m2 = st.columns(2)
+                m1.metric("دقة نموذج BERT", f"{acc_bert:.2%}")
+                m2.metric("دقة Logistic Regression", f"{acc_lr:.2%}")
+
+                # Confusion Matrices
+                col_cm1, col_cm2 = st.columns(2)
+                with col_cm1:
+                    st.write("**BERT Confusion Matrix**")
+                    cm = confusion_matrix(y_test, y_test_bert, labels=LABEL_ORDER)
+                    fig, ax = plt.subplots()
+                    ConfusionMatrixDisplay(cm, display_labels=LABEL_ORDER).plot(cmap='Blues', ax=ax)
+                    st.pyplot(fig)
+                
+                with col_cm2:
+                    st.write("**ML Confusion Matrix**")
+                    cm_lr = confusion_matrix(y_test, y_test_lr, labels=LABEL_ORDER)
+                    fig, ax = plt.subplots()
+                    ConfusionMatrixDisplay(cm_lr, display_labels=LABEL_ORDER).plot(cmap='Greens', ax=ax)
+                    st.pyplot(fig)
+
+                # Export Result
+                st.subheader("📥 تحميل النتائج")
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df.to_excel(writer, index=False)
+                st.download_button(label="تحميل ملف النتائج النهائي", data=output.getvalue(), 
+                                   file_name="sentiment_analysis_results.xlsx", 
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
