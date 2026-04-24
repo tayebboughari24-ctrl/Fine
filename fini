@@ -1,0 +1,242 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from transformers import pipeline
+import torch
+from datetime import datetime
+import io
+import time
+
+# --- 1. CONFIGURATION & STYLING ---
+st.set_page_config(
+    page_title="Sentify Pro | AI Sentiment Intelligence",
+    page_icon="🧠",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+def apply_custom_style():
+    st.markdown("""
+    <style>
+        /* Main Styling */
+        .main { background-color: #fcfcfd; }
+        .stMetric { background-color: #ffffff; padding: 15px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+        
+        /* Custom Cards */
+        .sentiment-card {
+            padding: 24px;
+            border-radius: 16px;
+            border-left: 6px solid;
+            margin-bottom: 20px;
+            background-color: white;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        }
+        
+        /* Animation Effects */
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .fade-in { animation: fadeIn 0.8s ease-in; }
+        
+        /* Buttons Styling */
+        .stButton>button {
+            border-radius: 10px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+    </style>
+    """, unsafe_allow_status=True)
+
+# --- 2. CORE AI ENGINE (SENTIMENT ANALYZER) ---
+class SentimentSaaS:
+    def __init__(self):
+        self.model_name = "distilbert-base-uncased-finetuned-sst-2-english"
+        self.device = 0 if torch.cuda.is_available() else -1
+
+    @st.cache_resource(_self)
+    def get_pipeline(_self):
+        """تحميل النموذج مرة واحدة مع دعم الـ GPU"""
+        return pipeline(
+            "sentiment-analysis", 
+            model=_self.model_name,
+            device=_self.device,
+            truncation=True
+        )
+
+    def analyze_batch(self, texts):
+        """Batch Processing لضمان السرعة العالية في الملفات الضخمة"""
+        nlp = self.get_pipeline()
+        return nlp(texts, batch_size=16)
+
+# --- 3. SESSION STATE MANAGEMENT ---
+def init_session():
+    if 'history' not in st.session_state:
+        st.session_state.history = []
+    if 'current_results' not in st.session_state:
+        st.session_state.current_results = None
+
+# --- 4. UI COMPONENTS ---
+def render_sidebar():
+    with st.sidebar:
+        st.image("https://cdn-icons-png.flaticon.com/512/8653/8653200.png", width=70)
+        st.title("Sentify Pro AI")
+        st.caption("v2.5.0 | Enterprise Edition")
+        st.divider()
+        
+        mode = st.selectbox("🎯 Analysis Mode", ["Single Text", "Batch File Processing", "Analytics History"])
+        
+        st.divider()
+        st.subheader("💡 Tips")
+        st.info("Batch processing supports up to 10k rows for real-time analysis.")
+        
+        if st.button("Reset Session 🔄", use_container_width=True):
+            st.session_state.history = []
+            st.rerun()
+        
+        return mode
+
+def render_metrics(df):
+    if not df.empty:
+        pos_pct = len(df[df['Sentiment'] == 'POSITIVE']) / len(df)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Analyzed", len(df))
+        c2.metric("Positive Rate", f"{pos_pct:.1%}", delta="Optimistic" if pos_pct > 0.5 else "Neutral")
+        c3.metric("Avg Confidence", f"{df['Confidence'].mean():.1%}")
+
+# --- 5. MAIN APP LOGIC ---
+def main():
+    apply_custom_style()
+    init_session()
+    ai_engine = SentimentSaaS()
+    
+    selected_mode = render_sidebar()
+
+    if selected_mode == "Single Text":
+        st.title("🚀 Real-time Sentiment Intelligence")
+        st.markdown("Analyze customer feedback or social media posts instantly using deep learning.")
+
+        col_input, col_result = st.columns([1.2, 0.8], gap="large")
+
+        with col_input:
+            st.subheader("Input Data")
+            example_text = "The new product launch exceeded all our expectations, the interface is incredibly intuitive!"
+            
+            if st.button("✨ Use Professional Example"):
+                st.session_state.txt_area = example_text
+            
+            user_input = st.text_area(
+                "Enter text for analysis:", 
+                value=st.session_state.get('txt_area', ""),
+                height=200,
+                placeholder="Paste your content here..."
+            )
+
+            if st.button("Analyze Sentiment 🔍", type="primary", use_container_width=True):
+                if user_input.strip():
+                    with st.spinner("Neural network processing..."):
+                        result = ai_engine.analyze_batch([user_input])[0]
+                        
+                        # Save to history
+                        entry = {
+                            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "Content": user_input[:100] + "...",
+                            "Sentiment": result['label'],
+                            "Confidence": result['score']
+                        }
+                        st.session_state.history.append(entry)
+                        st.session_state.current_results = result
+                else:
+                    st.warning("Please provide some text first.")
+
+        with col_result:
+            st.subheader("Analysis Result")
+            if st.session_state.current_results:
+                res = st.session_state.current_results
+                color = "#10b981" if res['label'] == "POSITIVE" else "#ef4444"
+                label_ar = "إيجابي" if res['label'] == "POSITIVE" else "سلبي"
+                
+                st.markdown(f"""
+                <div class="sentiment-card fade-in" style="border-color: {color};">
+                    <h1 style="color: {color}; margin-bottom:0;">{res['label']}</h1>
+                    <p style="color: #6b7280; font-size: 1.1em;">Confidence: {res['score']:.2%}</p>
+                </div>
+                """, unsafe_allow_status=True)
+                
+                # Confidence Meter
+                fig = go.Figure(go.Indicator(
+                    mode = "gauge+number",
+                    value = res['score'] * 100,
+                    domain = {'x': [0, 1], 'y': [0, 1]},
+                    title = {'text': "Confidence Score (%)", 'font': {'size': 18}},
+                    gauge = {'axis': {'range': [0, 100]},
+                             'bar': {'color': color},
+                             'steps' : [{'range': [0, 50], 'color': "#f3f4f6"}]}))
+                fig.update_layout(height=250, margin=dict(t=30, b=0, l=30, r=30))
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Results will appear here after analysis.")
+
+    elif selected_mode == "Batch File Processing":
+        st.title("📂 Enterprise Batch Processing")
+        st.markdown("Upload large datasets to extract sentiment trends across thousands of rows.")
+        
+        uploaded_file = st.file_uploader("Drop CSV or Excel file", type=["csv", "xlsx"])
+        
+        if uploaded_file:
+            df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('csv') else pd.read_excel(uploaded_file)
+            
+            with st.expander("👀 Data Preview", expanded=True):
+                st.dataframe(df.head(10), use_container_width=True)
+            
+            target_col = st.selectbox("Select Text Column:", df.columns)
+            
+            if st.button("Start Batch Analysis 🚀", type="primary"):
+                with st.status("Analyzing large dataset...", expanded=True) as status:
+                    texts = df[target_col].astype(str).tolist()
+                    results = ai_engine.analyze_batch(texts)
+                    
+                    df['Sentiment'] = [r['label'] for r in results]
+                    df['Confidence'] = [r['score'] for r in results]
+                    status.update(label="Analysis Complete!", state="complete")
+                
+                st.divider()
+                render_metrics(df)
+                
+                c1, c2 = st.columns(2)
+                with c1:
+                    fig_pie = px.pie(df, names='Sentiment', color='Sentiment', 
+                                    color_discrete_map={'POSITIVE':'#10b981', 'NEGATIVE':'#ef4444'},
+                                    hole=0.5, title="Sentiment Distribution")
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                with c2:
+                    st.subheader("Download Results")
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                        df.to_excel(writer, index=False, sheet_name='Analysis')
+                    st.download_button(
+                        "Download Analyzed Excel 📥", 
+                        data=output.getvalue(), 
+                        file_name="sentify_results.xlsx",
+                        use_container_width=True
+                    )
+                st.dataframe(df, use_container_width=True)
+
+    elif selected_mode == "Analytics History":
+        st.title("📜 Analysis History & Trends")
+        if st.session_state.history:
+            h_df = pd.DataFrame(st.session_state.history)
+            
+            st.subheader("Historical Timeline")
+            fig_line = px.line(h_df, x="Timestamp", y="Confidence", color="Sentiment",
+                              color_discrete_map={'POSITIVE':'#10b981', 'NEGATIVE':'#ef4444'},
+                              markers=True)
+            st.plotly_chart(fig_line, use_container_width=True)
+            
+            st.subheader("Detailed Logs")
+            st.table(h_df)
+        else:
+            st.info("No history found. Start analyzing to build your database.")
+
+if __name__ == "__main__":
+    main()
+    
